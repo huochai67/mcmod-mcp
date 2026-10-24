@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and data
+.env
+mcmod.db
+mcmod.db-wal
+mcmod.db-shm
+*.sqlite
+*.sqlite3
+
+# Tooling / editor
+.idea/
+.vscode/
+.DS_Store
