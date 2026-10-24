@@ -79,9 +79,10 @@ SEARCH_ENVELOPE = {
 
 class FakeApiClient:
     deleted = False
+    last_kwargs: dict | None = None
 
     def __init__(self, *args, **kwargs) -> None:
-        pass
+        type(self).last_kwargs = kwargs
 
     def get(self, path: str, *, params=None, refresh: bool = False):
         if path == "/health":
@@ -141,7 +142,14 @@ def test_cli_help() -> None:
     result = CliRunner().invoke(cli_app, ["--help"])
     assert result.exit_code == 0
     assert "search" in result.output
-    assert "--api-key" in result.output
+
+
+def test_cli_api_key_option(cli: CliRunner) -> None:
+    FakeApiClient.last_kwargs = None
+    result = cli.invoke(cli_app, ["--api-key", "secret", "health"])
+    assert result.exit_code == 0, result.output
+    assert FakeApiClient.last_kwargs is not None
+    assert FakeApiClient.last_kwargs["api_key"] == "secret"
 
 
 def _mcp_handler(request: httpx.Request) -> httpx.Response:
