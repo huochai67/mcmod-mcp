@@ -29,7 +29,19 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest
+      - name: Run tests
+        run: |
+          set +e
+          uv run pytest -q 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '```text'
+              tail -200 pytest.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
       - run: uv run ruff check src tests
 
   build-and-push:
