@@ -40,6 +40,9 @@ jobs:
               tail -200 pytest.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            grep -E '^(FAILED|ERROR) ' pytest.log | while IFS= read -r line; do
+              echo "::error title=pytest::$line"
+            done
           fi
           exit "$status"
       - run: uv run ruff check src tests
