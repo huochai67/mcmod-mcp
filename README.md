@@ -17,6 +17,7 @@
 - 筛选条件元数据（分类、MC 版本、加载器、状态、排序等）。
 - SQLite（默认）或 MariaDB 持久缓存，按资源类型配置 TTL。
 - CLI 的表格/JSON 双输出；MCP 的 14 个只读工具。
+- 可选共享密钥鉴权：REST API、MCP HTTP 与缓存管理共用 `MCMOD_API_KEY`。
 - 全局请求限速、429/5xx 重试、OpenAPI 文档。
 
 ## 架构
@@ -97,7 +98,7 @@ docker run -d --name mcmod-api \
   mcmod-mcp:0.1
 ```
 
-- 如果 API 暴露到公网，务必设置 `MCMOD_ADMIN_TOKEN`，否则缓存清理接口对调用方开放。
+- 如果 API 暴露到公网，务必设置 `MCMOD_API_KEY`。REST API 与 MCP HTTP 端点共用这个密钥；未设置时两者都不鉴权。
 - 国内构建可替换基础镜像或 PyPI 源：
 
 ```bash
@@ -112,6 +113,20 @@ docker build \
 ```bash
 docker exec mcmod-api mcmod mod 2
 ```
+
+镜像也可启动 MCP HTTP 入口。MCP 与 REST API 共用 `MCMOD_API_KEY`；`MCMOD_API_BASE` 必须指向容器可访问的 API 地址：
+
+```bash
+docker run -d --name mcmod-mcp \
+  --no-healthcheck \
+  -p 127.0.0.1:8001:8001 \
+  -e MCMOD_API_KEY="$MCMOD_API_KEY" \
+  -e MCMOD_API_BASE="http://<api-host>:8000" \
+  --entrypoint mcmod-mcp mcmod-mcp:0.1 \
+  --host 0.0.0.0 --port 8001
+```
+
+> 镜像的 HEALTHCHECK 检查 API 的 `/health`（8000 端口），单独运行 MCP 入口时需加 `--no-healthcheck`。MCP 本身只提供 `POST /mcp` JSON-RPC 2.0，不提供 `/health`。
 
 ## GitHub Actions
 
@@ -153,7 +168,7 @@ docker pull ghcr.io/huochai67/mcmod-mcp:latest
 | `MCMOD_API_HOST` | `127.0.0.1` | REST API 监听地址 |
 | `MCMOD_API_PORT` | `8000` | REST API 端口 |
 | `MCMOD_API_BASE` | `http://127.0.0.1:8000` | CLI/MCP 访问的 API 地址 |
-| `MCMOD_ADMIN_TOKEN` | 空 | 设置后，缓存清理接口要求 `X-Admin-Token` |
+| `MCMOD_API_KEY` | 空 | REST API 与 MCP 共用的密钥；设置后要求 `Authorization: Bearer` 或 `X-API-Key`。空值关闭鉴权 |
 | `MCMOD_CORS_ORIGINS` | 空 | 逗号分隔的 CORS 来源 |
 
 ### 数据库 URL
@@ -190,6 +205,20 @@ uv run mcmod serve
 ```
 
 ## REST API
+
+### 鉴权
+
+设置 `MCMOD_API_KEY` 后，REST API 与 MCP HTTP 端点共用同一个密钥。除 `/health`、`/docs`、`/openapi.json` 外，所有请求都必须携带以下任一请求头：
+
+```bash
+curl -H "Authorization: Bearer $MCMOD_API_KEY" http://127.0.0.1:8000/api/v1/mods/2
+curl -H "X-API-Key: $MCMOD_API_KEY" http://127.0.0.1:8000/api/v1/cache/stats
+```
+
+- 缺失或错误时返回 HTTP 401，错误体 `code` 为 `unauthorized`。
+- `/health` 保持公开，供 Docker 健康检查使用；Swagger UI/OpenAPI 也保持公开，便于查看接口定义。
+- `MCMOD_API_KEY` 为空时关闭鉴权，仅适合本机开发。公网部署必须设置。
+- CLI 和 MCP Server 使用同一个 `MCMOD_API_KEY`：它既是服务端入站密钥，也是 MCP Server 访问 REST API 的出站密钥。
 
 ### 响应约定
 
@@ -229,7 +258,7 @@ uv run mcmod serve
 | HTTP | code | 含义 |
 |---|---|---|
 | 400 | `invalid_request` | 非法的筛选项/排序值 |
-| 401 | `unauthorized` | 缓存管理令牌错误 |
+| 401 | `unauthorized` | API key 缺失或错误 |
 | 404 | `not_found` | 上游页面不存在 |
 | 422 | `invalid_request` | 参数校验失败（FastAPI） |
 | 502 | `upstream_error` / `parse_error` | 上游错误或页面结构变化 |
@@ -256,8 +285,8 @@ uv run mcmod serve
 | GET | `/api/v1/authors/{author_id}` | 作者/团队 | `refresh` |
 | GET | `/api/v1/meta/filters` | 筛选项 | `kind=mod|modpack` |
 | GET | `/api/v1/cache/stats` | 缓存统计 | — |
-| POST | `/api/v1/cache/purge` | 删除过期缓存 | `X-Admin-Token`（若配置） |
-| DELETE | `/api/v1/cache` | 清空缓存 | `X-Admin-Token`（若配置） |
+| POST | `/api/v1/cache/purge` | 删除过期缓存 | — |
+| DELETE | `/api/v1/cache` | 清空缓存 | — |
 
 参数取值：
 
@@ -280,7 +309,7 @@ uv run mcmod serve
 - `refresh=true` 跳过读取，但成功抓取后仍会覆盖写入缓存。
 - 缓存读写失败时服务降级为实时抓取（健康检查会显示 `degraded`）；缓存统计/清理失败返回 503。
 - `POST /api/v1/cache/purge` 只删除已过期条目；`DELETE /api/v1/cache` 删除全部。
-- 配置 `MCMOD_ADMIN_TOKEN` 后，两个写接口都要求请求头 `X-Admin-Token`；未配置时允许本机调用。
+- 设置 `MCMOD_API_KEY` 后，所有 REST 端点（除 `/health`、`/docs`、`/openapi.json`）都要求同一个密钥；缓存统计/清理接口也不例外。
 - 多 worker 部署时逐键锁只在单进程内生效；SQLite 使用 WAL，MariaDB 建议使用独立数据库/连接池。
 
 ## CLI
@@ -290,7 +319,7 @@ CLI 只是 REST API 的客户端，先启动 `mcmod serve`。
 ```bash
 # 全局选项
 mcmod --api http://127.0.0.1:8000 --json search 工业化
-mcmod --admin-token "$MCMOD_ADMIN_TOKEN" cache clear --yes
+mcmod --api-key "$MCMOD_API_KEY" cache clear --yes
 
 # 搜索与列表
 mcmod search 工业化 --filter mods
@@ -323,44 +352,74 @@ mcmod cache clear --yes
 
 ## MCP Server
 
-MCP Server 通过 REST API 读取数据，因此需要先启动 API：
+MCP Server 只提供 **JSON-RPC 2.0 over HTTP**：单个 `POST /mcp` 端点，响应 `application/json`，不使用 stdio/SSE，也不要求会话。它通过 REST API 读取数据，不直接抓取 mcmod.cn。
+
+设置同一个密钥并启动两个进程：
 
 ```bash
-mcmod serve                       # 终端 1
-mcmod-mcp                         # 终端 2：stdio 传输
+export MCMOD_API_KEY='change-me'
+mcmod serve                                          # 终端 1：REST API :8000
+mcmod-mcp --host 127.0.0.1 --port 8001 --path /mcp   # 终端 2：MCP :8001
 ```
 
-### Claude Desktop / Cursor 配置
+`MCMOD_API_KEY` 同时用于两件事：
 
-把可执行文件换成你的实际路径（`uv run` 安装后通常是项目下的 `.venv/bin/mcmod-mcp`）：
+1. 校验客户端访问 `POST /mcp`；
+2. MCP Server 访问 REST API。
+
+未设置 `MCMOD_API_KEY` 时两端都不鉴权，仅适合本机开发。MCP 暴露到公网时必须设置密钥，并建议放在 TLS 反向代理后。
+
+### JSON-RPC 示例
+
+直接调用 `tools/list`，无需先 `initialize`，也无需会话：
+
+```bash
+curl -s http://127.0.0.1:8001/mcp \
+  -H "Authorization: Bearer $MCMOD_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+调用工具：
+
+```bash
+curl -s http://127.0.0.1:8001/mcp \
+  -H "Authorization: Bearer $MCMOD_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcmod_get_mod","arguments":{"mod":2}}}'
+```
+
+- 每个 HTTP POST 独立处理，标准 MCP 初始化流程也兼容。
+- 成功响应为 JSON-RPC 2.0 的 `result`，协议错误使用 `error` 对象。
+- 鉴权失败在 HTTP 层返回 401；也可以使用 `X-API-Key` 请求头。
+- MCP 通过 `MCMOD_API_BASE` 访问 REST API；远程部署时指向可访问的 API 地址。
+
+### 客户端配置
+
+支持 Streamable HTTP 的 MCP 客户端：
 
 ```json
 {
   "mcpServers": {
     "mcmod": {
-      "command": "/absolute/path/to/mcmod-mcp/.venv/bin/mcmod-mcp",
-      "args": [],
-      "env": {
-        "MCMOD_API_BASE": "http://127.0.0.1:8000"
+      "type": "http",
+      "url": "http://127.0.0.1:8001/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-api-key>"
       }
     }
   }
 }
 ```
 
-- Claude Desktop：`claude_desktop_config.json`
-- Cursor：项目内 `.cursor/mcp.json` 或全局 MCP 配置
-- Claude Code：`claude mcp add mcmod -- /absolute/path/to/mcmod-mcp`
-
-### HTTP 传输
+Claude Code：
 
 ```bash
-mcmod-mcp --transport streamable-http --host 127.0.0.1 --port 8001 --path /mcp
-# 或旧版 SSE
-mcmod-mcp --transport sse --host 127.0.0.1 --port 8001
+claude mcp add --transport http mcmod http://127.0.0.1:8001/mcp \
+  --header "Authorization: Bearer $MCMOD_API_KEY"
 ```
 
-远程部署时把 `MCMOD_API_BASE` 指向可访问的 API；MCP 本身不直接访问 mcmod.cn。
+远程部署时使用 `--host 0.0.0.0` 监听，并通过防火墙/反向代理限制来源；不要把无密钥的 MCP 端口暴露到公网。
 
 ### 工具
 

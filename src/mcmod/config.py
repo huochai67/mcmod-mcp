@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65535)
     api_base: str = "http://127.0.0.1:8000"
-    admin_token: str = ""
+    api_key: str = ""
     cors_origins: str = ""
 
     @field_validator("database_url")

@@ -6,10 +6,12 @@ import argparse
 import json
 from typing import Any
 
+import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
+from .auth import ApiKeyMiddleware
 from .client import McmodApiClient
 from .config import Settings
 from .errors import ApiClientError
@@ -36,7 +38,7 @@ def build_server(
     api = client or McmodApiClient(
         settings.api_base,
         timeout=settings.timeout + 15,
-        admin_token=settings.admin_token or None,
+        api_key=settings.api_key or None,
     )
 
     def request(path: str, params: dict[str, Any] | None = None, refresh: bool = False) -> str:
@@ -202,16 +204,12 @@ def main() -> None:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    parser = argparse.ArgumentParser(description="MCP server for mcmod.cn (API-backed)")
-    parser.add_argument(
-        "--transport",
-        choices=["stdio", "sse", "streamable-http"],
-        default="stdio",
-        help="MCP transport (default: stdio)",
+    parser = argparse.ArgumentParser(
+        description="MCP server for mcmod.cn: JSON-RPC 2.0 over HTTP"
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8001)
-    parser.add_argument("--path", default="/mcp", help="streamable-http endpoint path")
+    parser.add_argument("--host", default="127.0.0.1", help="listen address")
+    parser.add_argument("--port", type=int, default=8001, help="listen port")
+    parser.add_argument("--path", default="/mcp", help="JSON-RPC endpoint path")
     parser.add_argument(
         "--api-base",
         default=None,
@@ -225,20 +223,17 @@ def main() -> None:
         client=McmodApiClient(
             args.api_base or settings.api_base,
             timeout=settings.timeout + 15,
-            admin_token=settings.admin_token or None,
+            api_key=settings.api_key or None,
         ),
     )
-    if args.transport == "stdio":
-        server.run("stdio")
-    elif args.transport == "sse":
-        server.run("sse", host=args.host, port=args.port)
-    else:
-        server.run(
-            "streamable-http",
-            host=args.host,
-            port=args.port,
-            streamable_http_path=args.path,
-        )
+    app = server.streamable_http_app(
+        streamable_http_path=args.path,
+        json_response=True,
+        stateless_http=True,
+        host=args.host,
+    )
+    app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

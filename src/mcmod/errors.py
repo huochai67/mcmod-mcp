@@ -38,11 +38,6 @@ class CacheUnavailableError(McmodError):
     status_code = 503
 
 
-class AuthenticationError(McmodError):
-    code = "unauthorized"
-    status_code = 401
-
-
 class ApiClientError(McmodError):
     """Raised by the HTTP API client used by the CLI and MCP server."""
 

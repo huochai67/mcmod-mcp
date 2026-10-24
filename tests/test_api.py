@@ -78,25 +78,40 @@ def test_not_found_and_validation_errors(client: TestClient) -> None:
     assert invalid_filter.json()["error"]["code"] == "invalid_request"
 
 
-def test_cache_stats_and_admin(settings: Settings, service: McmodService) -> None:
-    settings = settings.model_copy(update={"admin_token": "secret"})
+def test_api_key_protects_data_and_cache(settings: Settings, service: McmodService) -> None:
+    settings = settings.model_copy(update={"api_key": "secret"})
     app = create_app(settings, service)
+    headers = {"Authorization": "Bearer secret"}
     with TestClient(app) as client:
-        client.get("/api/v1/mods/2")
-        stats = client.get("/api/v1/cache/stats").json()
+        denied = client.get("/api/v1/mods/2")
+        assert denied.status_code == 401
+        assert denied.json()["error"]["code"] == "unauthorized"
+        assert denied.headers["www-authenticate"].startswith("Bearer")
+        assert client.get(
+            "/api/v1/mods/2", headers={"Authorization": "Bearer wrong"}
+        ).status_code == 401
+
+        assert client.get("/api/v1/mods/2", headers=headers).status_code == 200
+        stats = client.get("/api/v1/cache/stats", headers=headers).json()
         assert stats["entries"] >= 1
         assert stats["hits"] == 0
+
+        assert client.get("/health").status_code == 200
+        assert client.get("/openapi.json").status_code == 200
+        assert client.get("/docs").status_code == 200
 
         denied = client.delete("/api/v1/cache")
         assert denied.status_code == 401
         assert denied.json()["error"]["code"] == "unauthorized"
 
-        allowed = client.delete("/api/v1/cache", headers={"X-Admin-Token": "secret"})
+        allowed = client.delete("/api/v1/cache", headers=headers)
         assert allowed.status_code == 200
         assert allowed.json()["deleted"] >= 1
-        assert client.get("/api/v1/cache/stats").json()["entries"] == 0
+        assert client.get("/api/v1/cache/stats", headers=headers).json()["entries"] == 0
 
-        purge = client.post("/api/v1/cache/purge", headers={"X-Admin-Token": "secret"})
+        purge = client.post(
+            "/api/v1/cache/purge", headers={"X-API-Key": "secret"}
+        )
         assert purge.status_code == 200
 
 

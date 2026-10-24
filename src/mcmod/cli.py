@@ -86,15 +86,15 @@ def _callback(
         help="API 服务地址（默认 http://127.0.0.1:8000）",
     ),
     json_output: bool = typer.Option(False, "--json", help="输出原始 JSON（含 meta）"),
-    admin_token: str = typer.Option(
-        None, "--admin-token", envvar="MCMOD_ADMIN_TOKEN", help="缓存管理令牌"
+    api_key: str = typer.Option(
+        None, "--api-key", envvar="MCMOD_API_KEY", help="REST API / MCP 共用密钥"
     ),
 ) -> None:
     settings = Settings()
     client = McmodApiClient(
         api or settings.api_base,
         timeout=settings.timeout + 15,
-        admin_token=admin_token or settings.admin_token or None,
+        api_key=api_key or settings.api_key or None,
     )
     ctx.obj = CliState(client=client, json_output=json_output)
 

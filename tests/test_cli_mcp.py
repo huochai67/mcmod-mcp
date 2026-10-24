@@ -5,10 +5,12 @@ import json
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
 from typer.testing import CliRunner
 
 import mcmod.cli as cli_module
+from mcmod.auth import ApiKeyMiddleware
 from mcmod.cli import app as cli_app
 from mcmod.client import McmodApiClient
 from mcmod.mcp_server import build_server
@@ -139,6 +141,7 @@ def test_cli_help() -> None:
     result = CliRunner().invoke(cli_app, ["--help"])
     assert result.exit_code == 0
     assert "search" in result.output
+    assert "--api-key" in result.output
 
 
 def _mcp_handler(request: httpx.Request) -> httpx.Response:
@@ -185,3 +188,71 @@ def test_mcp_tools_and_call() -> None:
             await server.call_tool("mcmod_get_mod", {"mod": "not-an-id"})
 
     asyncio.run(run())
+
+
+def test_api_client_sends_shared_key() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": {}, "meta": {}})
+
+    api = McmodApiClient(
+        "http://test",
+        api_key="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    assert api.get("/api/v1/mods/2") == {"data": {}, "meta": {}}
+    assert seen[0].headers["authorization"] == "Bearer secret"
+
+
+def test_mcp_http_json_rpc_and_shared_key() -> None:
+    api = McmodApiClient("http://test", transport=httpx.MockTransport(_mcp_handler))
+    server = build_server(client=api)
+    app = server.streamable_http_app(
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+    )
+    app.add_middleware(ApiKeyMiddleware, api_key="secret")
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    accept = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1:8001"}
+
+    with TestClient(app) as client:
+        denied = client.post("/mcp", json=payload, headers=accept)
+        assert denied.status_code == 401
+
+        allowed = client.post(
+            "/mcp",
+            json=payload,
+            headers={**accept, "Authorization": "Bearer secret"},
+        )
+        assert allowed.status_code == 200
+        assert allowed.headers["content-type"] == "application/json"
+        assert "mcp-session-id" not in allowed.headers
+        result = allowed.json()
+        assert result["jsonrpc"] == "2.0"
+        assert result["id"] == 1
+        assert any(tool["name"] == "mcmod_search" for tool in result["result"]["tools"])
+
+        called = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "mcmod_get_mod", "arguments": {"mod": 2}},
+            },
+            headers={**accept, "Authorization": "Bearer secret"},
+        )
+        assert called.status_code == 200
+        text = called.json()["result"]["content"][0]["text"]
+        assert "工业时代2" in text
+
+        via_header = client.post(
+            "/mcp",
+            json=payload,
+            headers={**accept, "X-API-Key": "secret"},
+        )
+        assert via_header.status_code == 200
+        assert via_header.json()["jsonrpc"] == "2.0"

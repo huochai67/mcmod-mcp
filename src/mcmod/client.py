@@ -16,11 +16,11 @@ class McmodApiClient:
         base_url: str,
         *,
         timeout: float = 30.0,
-        admin_token: str | None = None,
+        api_key: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.admin_token = admin_token
+        self.api_key = api_key
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout),
@@ -57,8 +57,8 @@ class McmodApiClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         headers = {}
-        if self.admin_token:
-            headers["X-Admin-Token"] = self.admin_token
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         try:
             response = self._client.request(method, path, params=params, headers=headers)
         except httpx.ConnectError as exc:

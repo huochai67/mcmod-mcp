@@ -7,16 +7,17 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import __version__
+from .auth import ApiKeyMiddleware
 from .cache import CacheError, CacheStore
 from .config import Settings
 from .db import create_engine_from_settings, init_database, make_session_factory, ping_database
-from .errors import AuthenticationError, McmodError
+from .errors import McmodError
 from .http import McmodHttp
 from .models import (
     AuthorDetail,
@@ -54,12 +55,6 @@ def _finish(response: Response, envelope: Envelope) -> Envelope:
     response.headers["X-Cache"] = envelope.meta.cache
     response.headers["Cache-Control"] = "no-store"
     return envelope
-
-
-def _admin_dependency(request: Request, token: str | None = Header(default=None, alias="X-Admin-Token")):
-    settings = _settings(request)
-    if settings.admin_token and token != settings.admin_token:
-        raise AuthenticationError("invalid or missing admin token")
 
 
 def create_app(
@@ -109,6 +104,9 @@ def create_app(
     app.state.cache = cache
     app.state.engine = engine
     app.state.owns_resources = owns_resources
+
+    if settings.api_key:
+        app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
 
     if settings.cors_origin_list:
         app.add_middleware(
@@ -392,7 +390,6 @@ def create_app(
         "/api/v1/cache/purge",
         response_model=CacheClearResult,
         tags=["cache"],
-        dependencies=[Depends(_admin_dependency)],
     )
     def purge_cache(svc: McmodService = Depends(_service)) -> CacheClearResult:
         return CacheClearResult(deleted=svc.cache.purge_expired())
@@ -401,7 +398,6 @@ def create_app(
         "/api/v1/cache",
         response_model=CacheClearResult,
         tags=["cache"],
-        dependencies=[Depends(_admin_dependency)],
     )
     def clear_cache(svc: McmodService = Depends(_service)) -> CacheClearResult:
         return CacheClearResult(deleted=svc.clear_cache())

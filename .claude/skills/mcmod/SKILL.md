@@ -36,7 +36,7 @@ metadata:
 2. 只调用实际存在的工具。不要编造工具名、参数或返回结果。
 3. 如果没有任何 `mcmod_*` 工具：
    - 不要改用浏览器、`curl` 或自写爬虫直接抓取 mcmod.cn。
-   - 告诉用户先启动 REST API（`mcmod serve`），再在 MCP 客户端配置 `mcmod-mcp`，并确认 `MCMOD_API_BASE` 指向该 API。
+   - 告诉用户先启动 REST API（`mcmod serve`）和 MCP HTTP 服务（`mcmod-mcp`），确认 `MCMOD_API_BASE` 指向该 API，并在 MCP 客户端用 `Authorization: Bearer $MCMOD_API_KEY` 连接 `/mcp`。
    - 如果工具存在但报连接错误，按下方“错误处理”处理。
 
 ## 工作流程
@@ -209,7 +209,7 @@ mcmod_get_author(author=21425)
 - 不要猜测或编造模组 ID、物品 ID、配方、版本兼容性、下载链接。
 - 不要在 MCP 工具可用时用浏览器/爬虫直接抓 mcmod.cn。
 - 不要下载或尝试下载 jar/整合包文件，也不要绕过验证码。
-- 不要调用缓存清理/删除接口，除非用户明确要求且已配置管理员令牌。
+- 不要调用缓存清理/删除接口，除非用户明确要求且已配置 `MCMOD_API_KEY`。
 - 不要对同一失败请求连续重试，不要批量枚举全站。
-- 不要泄露 `MCMOD_ADMIN_TOKEN` 或任何本地凭据。
+- 不要泄露 `MCMOD_API_KEY` 或任何本地凭据。
 - 不要忽略数据版权：引用时保留 mcmod.cn 链接；数据遵循 CC BY-NC-SA 3.0。
