@@ -216,7 +216,7 @@ def test_mcp_http_json_rpc_and_shared_key() -> None:
     )
     app.add_middleware(ApiKeyMiddleware, api_key="secret")
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-    accept = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1:8001"}
+    accept = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1:8000"}
 
     with TestClient(app) as client:
         denied = client.post("/mcp", json=payload, headers=accept)

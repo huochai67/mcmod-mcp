@@ -33,7 +33,6 @@ dev = [
 [project.scripts]
 mcmod = "mcmod.cli:main"
 mcmod-api = "mcmod.api:main"
-mcmod-mcp = "mcmod.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcmod"]

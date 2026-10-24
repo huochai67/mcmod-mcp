@@ -1,17 +1,14 @@
-"""MCP server exposing mcmod tools through the REST API."""
+"""MCP tools exposed over the REST API's JSON-RPC endpoint."""
 
 from __future__ import annotations
 
-import argparse
 import json
 from typing import Any
 
-import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
-from .auth import ApiKeyMiddleware
 from .client import McmodApiClient
 from .config import Settings
 from .errors import ApiClientError
@@ -197,44 +194,3 @@ def build_server(
             raise ToolError(f"{exc.code}: {exc.message}") from exc
 
     return server
-
-
-def main() -> None:
-    import logging
-
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    parser = argparse.ArgumentParser(
-        description="MCP server for mcmod.cn: JSON-RPC 2.0 over HTTP"
-    )
-    parser.add_argument("--host", default="127.0.0.1", help="listen address")
-    parser.add_argument("--port", type=int, default=8001, help="listen port")
-    parser.add_argument("--path", default="/mcp", help="JSON-RPC endpoint path")
-    parser.add_argument(
-        "--api-base",
-        default=None,
-        help="mcmod REST API base URL (default: MCMOD_API_BASE or http://127.0.0.1:8000)",
-    )
-    args = parser.parse_args()
-
-    settings = Settings()
-    server = build_server(
-        settings=settings,
-        client=McmodApiClient(
-            args.api_base or settings.api_base,
-            timeout=settings.timeout + 15,
-            api_key=settings.api_key or None,
-        ),
-    )
-    app = server.streamable_http_app(
-        streamable_http_path=args.path,
-        json_response=True,
-        stateless_http=True,
-        host=args.host,
-    )
-    app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
-    uvicorn.run(app, host=args.host, port=args.port)
-
-
-if __name__ == "__main__":
-    main()

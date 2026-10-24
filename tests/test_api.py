@@ -64,6 +64,21 @@ def test_all_read_endpoints(client: TestClient) -> None:
         assert payload["meta"]["cache"] in {"miss", "hit"}
 
 
+def test_mcp_json_rpc_on_same_port(client: TestClient) -> None:
+    response = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"Host": "127.0.0.1:8000"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert "mcp-session-id" not in response.headers
+    payload = response.json()
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["id"] == 1
+    assert any(tool["name"] == "mcmod_search" for tool in payload["result"]["tools"])
+
+
 def test_not_found_and_validation_errors(client: TestClient) -> None:
     missing = client.get("/api/v1/mods/99999")
     assert missing.status_code == 404
@@ -99,6 +114,19 @@ def test_api_key_protects_data_and_cache(settings: Settings, service: McmodServi
         assert client.get("/health").status_code == 200
         assert client.get("/openapi.json").status_code == 200
         assert client.get("/docs").status_code == 200
+
+        mcp_payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        mcp_host = {"Host": "127.0.0.1:8000"}
+        assert (
+            client.post("/mcp", json=mcp_payload, headers=mcp_host).status_code == 401
+        )
+        mcp_allowed = client.post(
+            "/mcp",
+            json=mcp_payload,
+            headers={**mcp_host, "Authorization": "Bearer secret"},
+        )
+        assert mcp_allowed.status_code == 200
+        assert mcp_allowed.headers["content-type"] == "application/json"
 
         denied = client.delete("/api/v1/cache")
         assert denied.status_code == 401

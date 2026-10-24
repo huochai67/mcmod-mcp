@@ -2,7 +2,7 @@
 name: mcmod
 description: 查询 MC百科（mcmod.cn）的 Minecraft 模组、整合包、物品、合成表、教程与作者。Use when the user asks about Minecraft mods/modpacks, mod compatibility, MC versions, crafting recipes, item usages, modpack changelogs, or mcmod.cn IDs/links; requires the mcmod MCP server.
 license: MIT
-compatibility: Requires the mcmod MCP server (mcmod-mcp) and its REST API (default http://127.0.0.1:8000). Read-only; no direct web scraping.
+compatibility: Requires the mcmod server (REST API + MCP at /mcp, default http://127.0.0.1:8000). Read-only; no direct web scraping.
 metadata:
   mcp-server: mcmod
   version: "1.0.0"
@@ -36,7 +36,7 @@ metadata:
 2. 只调用实际存在的工具。不要编造工具名、参数或返回结果。
 3. 如果没有任何 `mcmod_*` 工具：
    - 不要改用浏览器、`curl` 或自写爬虫直接抓取 mcmod.cn。
-   - 告诉用户先启动 REST API（`mcmod serve`）和 MCP HTTP 服务（`mcmod-mcp`），确认 `MCMOD_API_BASE` 指向该 API，并在 MCP 客户端用 `Authorization: Bearer $MCMOD_API_KEY` 连接 `/mcp`。
+   - 告诉用户启动 `mcmod serve`（同一端口同时提供 REST API 和 MCP `/mcp`），确认 `MCMOD_API_BASE` 指向该服务，并在 MCP 客户端用 `Authorization: Bearer $MCMOD_API_KEY` 连接 `/mcp`。
    - 如果工具存在但报连接错误，按下方“错误处理”处理。
 
 ## 工作流程

@@ -1,6 +1,6 @@
 # mcmod-mcp
 
-非官方 **REST API + MCP Server + CLI**，用于读取 [MC百科 (mcmod.cn)](https://www.mcmod.cn/) 的公开页面数据。
+非官方 **REST API + MCP + CLI**，用于读取 [MC百科 (mcmod.cn)](https://www.mcmod.cn/) 的公开页面数据。
 
 网站是服务端渲染（SSR），没有公开 API。本项目抓取并解析 HTML，将结果规范化为 JSON，缓存到 SQLite 或 MariaDB，再通过 REST、MCP 或命令行提供给调用方。
 
@@ -26,17 +26,19 @@
 mcmod.cn / search.mcmod.cn
           │  HTTPS（限速 + 重试）
           ▼
-    mcmod-api（FastAPI）
-       ├── parsers/       HTML → Pydantic 模型
-       ├── service/       抓取、解析、缓存编排
+    mcmod-api / mcmod serve（FastAPI，单进程单端口）
+       ├── /api/v1/*       REST API
+       ├── /mcp            MCP JSON-RPC 2.0
+       ├── parsers/        HTML → Pydantic 模型
+       ├── service/        抓取、解析、缓存编排
        └── SQLite/MariaDB api_cache 表
           ▲
           │ JSON（X-Cache: hit/miss/bypass）
           ├──────── CLI（mcmod）
-          └──────── MCP Server（mcmod-mcp）── Claude / Cursor / 其他 MCP 客户端
+          └──────── MCP 客户端（HTTP JSON-RPC 2.0）
 ```
 
-API 服务是唯一抓取网站的进程；CLI 与 MCP Server 只访问 REST API。这样缓存、限速和解析逻辑只有一份。
+REST API 和 MCP 由同一个 FastAPI 进程、同一个端口提供。API 服务是唯一抓取网站的进程；CLI 和 MCP 客户端都通过该进程访问数据，缓存、限速和解析逻辑只有一份。
 
 ## 快速开始
 
@@ -45,7 +47,7 @@ API 服务是唯一抓取网站的进程；CLI 与 MCP Server 只访问 REST API
 ```bash
 uv sync
 cp .env.example .env          # 可选，按需修改
-uv run mcmod serve            # 默认 http://127.0.0.1:8000
+uv run mcmod serve            # REST + MCP，默认 http://127.0.0.1:8000
 ```
 
 或安装为可编辑包：
@@ -67,11 +69,12 @@ curl http://127.0.0.1:8000/api/v1/mods/2
 
 - Swagger UI：<http://127.0.0.1:8000/docs>
 - OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
+- MCP JSON-RPC：`POST http://127.0.0.1:8000/mcp`
 - 首次访问某个资源会抓取网站（`X-Cache: miss`），后续命中缓存（`X-Cache: hit`）。
 
 ## Docker
 
-镜像包含 REST API、CLI 和 MCP Server 三个入口，默认启动 API，使用非 root 用户，SQLite 数据保存在 `/data` 卷中。
+镜像在同一个 FastAPI 进程、同一个端口中提供 REST API 和 `/mcp` MCP 端点，并包含 CLI；默认启动该服务，使用非 root 用户，SQLite 数据保存在 `/data` 卷中。
 
 ```bash
 docker build -t mcmod-mcp:0.1 .
@@ -88,7 +91,7 @@ docker inspect --format '{{.State.Health.Status}}' mcmod-api
 
 - `/data` 是持久化卷，SQLite 数据库默认为 `/data/mcmod.db`；删除容器不会丢缓存。
 - 使用 bind mount 时确保宿主目录对容器 UID `10001` 可写（例如 `mkdir -p ./data && sudo chown 10001:10001 ./data`），或直接使用上面的命名卷。
-- 修改端口时同时设置环境变量和端口映射：`-e MCMOD_API_PORT=9000 -p 9000:9000`。
+- 修改端口时同时设置环境变量和端口映射：`-e MCMOD_API_PORT=9000 -e MCMOD_API_BASE=http://127.0.0.1:9000 -p 9000:9000`。
 - 使用 MariaDB 时覆盖数据库 URL：
 
 ```bash
@@ -114,19 +117,7 @@ docker build \
 docker exec mcmod-api mcmod mod 2
 ```
 
-镜像也可启动 MCP HTTP 入口。MCP 与 REST API 共用 `MCMOD_API_KEY`；`MCMOD_API_BASE` 必须指向容器可访问的 API 地址：
-
-```bash
-docker run -d --name mcmod-mcp \
-  --no-healthcheck \
-  -p 127.0.0.1:8001:8001 \
-  -e MCMOD_API_KEY="$MCMOD_API_KEY" \
-  -e MCMOD_API_BASE="http://<api-host>:8000" \
-  --entrypoint mcmod-mcp mcmod-mcp:0.1 \
-  --host 0.0.0.0 --port 8001
-```
-
-> 镜像的 HEALTHCHECK 检查 API 的 `/health`（8000 端口），单独运行 MCP 入口时需加 `--no-healthcheck`。MCP 本身只提供 `POST /mcp` JSON-RPC 2.0，不提供 `/health`。
+MCP 与 REST API 同端口，无需单独容器或第二个端口。设置 `MCMOD_API_KEY` 后，MCP 客户端连接 `http://<host>:8000/mcp` 并携带同一个密钥即可。
 
 ## GitHub Actions
 
@@ -218,7 +209,7 @@ curl -H "X-API-Key: $MCMOD_API_KEY" http://127.0.0.1:8000/api/v1/cache/stats
 - 缺失或错误时返回 HTTP 401，错误体 `code` 为 `unauthorized`。
 - `/health` 保持公开，供 Docker 健康检查使用；Swagger UI/OpenAPI 也保持公开，便于查看接口定义。
 - `MCMOD_API_KEY` 为空时关闭鉴权，仅适合本机开发。公网部署必须设置。
-- CLI 和 MCP Server 使用同一个 `MCMOD_API_KEY`：它既是服务端入站密钥，也是 MCP Server 访问 REST API 的出站密钥。
+- CLI 与 MCP 端点使用同一个 `MCMOD_API_KEY`：它既是 REST/MCP 的入站密钥，也是 MCP 工具访问同进程 REST API 的出站密钥。
 
 ### 响应约定
 
@@ -352,29 +343,24 @@ mcmod cache clear --yes
 
 ## MCP Server
 
-MCP Server 只提供 **JSON-RPC 2.0 over HTTP**：单个 `POST /mcp` 端点，响应 `application/json`，不使用 stdio/SSE，也不要求会话。它通过 REST API 读取数据，不直接抓取 mcmod.cn。
+MCP 由同一个 FastAPI 进程、同一个端口提供，**不需要单独启动**。`mcmod serve`（或 `mcmod-api`）同时暴露：
 
-设置同一个密钥并启动两个进程：
+- REST API：`/api/v1/*`
+- MCP：`POST /mcp`，只使用 JSON-RPC 2.0，响应 `application/json`，不使用 stdio/SSE，也不要求会话。
 
 ```bash
 export MCMOD_API_KEY='change-me'
-mcmod serve                                          # 终端 1：REST API :8000
-mcmod-mcp --host 127.0.0.1 --port 8001 --path /mcp   # 终端 2：MCP :8001
+mcmod serve     # REST API + MCP 都在 http://127.0.0.1:8000
 ```
 
-`MCMOD_API_KEY` 同时用于两件事：
-
-1. 校验客户端访问 `POST /mcp`；
-2. MCP Server 访问 REST API。
-
-未设置 `MCMOD_API_KEY` 时两端都不鉴权，仅适合本机开发。MCP 暴露到公网时必须设置密钥，并建议放在 TLS 反向代理后。
+`MCMOD_API_KEY` 同时保护 REST API 和 MCP 端点；MCP 工具内部也使用该密钥访问同进程的 REST API。未设置时两者都不鉴权，仅适合本机开发。MCP 暴露到公网时必须设置密钥，并建议放在 TLS 反向代理后。
 
 ### JSON-RPC 示例
 
 直接调用 `tools/list`，无需先 `initialize`，也无需会话：
 
 ```bash
-curl -s http://127.0.0.1:8001/mcp \
+curl -s http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer $MCMOD_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
@@ -383,7 +369,7 @@ curl -s http://127.0.0.1:8001/mcp \
 调用工具：
 
 ```bash
-curl -s http://127.0.0.1:8001/mcp \
+curl -s http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer $MCMOD_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcmod_get_mod","arguments":{"mod":2}}}'
@@ -392,7 +378,8 @@ curl -s http://127.0.0.1:8001/mcp \
 - 每个 HTTP POST 独立处理，标准 MCP 初始化流程也兼容。
 - 成功响应为 JSON-RPC 2.0 的 `result`，协议错误使用 `error` 对象。
 - 鉴权失败在 HTTP 层返回 401；也可以使用 `X-API-Key` 请求头。
-- MCP 通过 `MCMOD_API_BASE` 访问 REST API；远程部署时指向可访问的 API 地址。
+- 监听地址和端口由 `MCMOD_API_HOST` / `MCMOD_API_PORT` 控制，REST 与 MCP 共用。
+- MCP 工具内部通过 `MCMOD_API_BASE` 调用 REST API；默认跟随监听端口，反向代理或特殊地址时再覆盖。
 
 ### 客户端配置
 
@@ -403,7 +390,7 @@ curl -s http://127.0.0.1:8001/mcp \
   "mcpServers": {
     "mcmod": {
       "type": "http",
-      "url": "http://127.0.0.1:8001/mcp",
+      "url": "http://127.0.0.1:8000/mcp",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
@@ -415,11 +402,11 @@ curl -s http://127.0.0.1:8001/mcp \
 Claude Code：
 
 ```bash
-claude mcp add --transport http mcmod http://127.0.0.1:8001/mcp \
+claude mcp add --transport http mcmod http://127.0.0.1:8000/mcp \
   --header "Authorization: Bearer $MCMOD_API_KEY"
 ```
 
-远程部署时使用 `--host 0.0.0.0` 监听，并通过防火墙/反向代理限制来源；不要把无密钥的 MCP 端口暴露到公网。
+远程部署时设置 `MCMOD_API_HOST=0.0.0.0`，并通过防火墙/反向代理限制来源；REST 与 MCP 共用同一个 TLS 入口，不要把无密钥端口暴露到公网。
 
 ### 工具
 
@@ -498,7 +485,7 @@ src/mcmod/
   models.py         Pydantic 响应模型
   parsers/          各页面 HTML 解析器
   cli.py            Typer CLI
-  mcp_server.py     MCP Server
+  mcp_server.py     MCP 工具与 JSON-RPC ASGI app
   client.py         CLI/MCP 使用的 REST 客户端
 tests/
   fixtures/         真实页面快照

@@ -15,10 +15,12 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .auth import ApiKeyMiddleware
 from .cache import CacheError, CacheStore
+from .client import McmodApiClient
 from .config import Settings
 from .db import create_engine_from_settings, init_database, make_session_factory, ping_database
 from .errors import McmodError
 from .http import McmodHttp
+from .mcp_server import build_server
 from .models import (
     AuthorDetail,
     CacheClearResult,
@@ -57,6 +59,14 @@ def _finish(response: Response, envelope: Envelope) -> Envelope:
     return envelope
 
 
+def _mcp_api_base(settings: Settings) -> str:
+    """Keep MCP's in-process REST calls on the configured listener port."""
+    base = settings.api_base.rstrip("/")
+    if base == "http://127.0.0.1:8000" and settings.api_port != 8000:
+        return f"http://127.0.0.1:{settings.api_port}"
+    return base
+
+
 def create_app(
     settings: Settings | None = None,
     service: McmodService | None = None,
@@ -76,6 +86,18 @@ def create_app(
     else:
         engine = None
 
+    mcp_api = McmodApiClient(
+        _mcp_api_base(settings),
+        timeout=settings.timeout + 15,
+        api_key=settings.api_key or None,
+    )
+    mcp_app = build_server(settings=settings, client=mcp_api).streamable_http_app(
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+        host=settings.api_host,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if cache is not None:
@@ -83,19 +105,24 @@ def create_app(
                 cache.purge_expired()
             except CacheError as exc:
                 logger.warning("could not purge expired cache rows: %s", exc)
-        yield
-        if owns_resources:
-            if http is not None:
-                http.close()
-            if engine is not None:
-                engine.dispose()
+        try:
+            async with mcp_app.router.lifespan_context(app):
+                yield
+        finally:
+            mcp_api.close()
+            if owns_resources:
+                if http is not None:
+                    http.close()
+                if engine is not None:
+                    engine.dispose()
 
     app = FastAPI(
         title="mcmod.cn API",
         version=__version__,
         description=(
             "Unofficial read-only API for mcmod.cn (Minecraft Mod Wiki). "
-            "Results are parsed from server-rendered HTML and cached in SQLite or MariaDB."
+            "Results are parsed from server-rendered HTML and cached in SQLite or MariaDB. "
+            "MCP tools are exposed as JSON-RPC 2.0 at /mcp."
         ),
         lifespan=lifespan,
     )
@@ -104,6 +131,7 @@ def create_app(
     app.state.cache = cache
     app.state.engine = engine
     app.state.owns_resources = owns_resources
+    app.state.mcp_app = mcp_app
 
     if settings.api_key:
         app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
@@ -402,6 +430,7 @@ def create_app(
     def clear_cache(svc: McmodService = Depends(_service)) -> CacheClearResult:
         return CacheClearResult(deleted=svc.clear_cache())
 
+    app.router.routes.extend(mcp_app.routes)
     return app
 
 

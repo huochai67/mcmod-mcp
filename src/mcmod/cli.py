@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,13 +106,19 @@ def serve(
     port: int = typer.Option(None, help="监听端口，默认读取 MCMOD_API_PORT"),
     reload: bool = typer.Option(False, "--reload", help="开发模式自动重载"),
 ) -> None:
-    """启动 REST API 服务。"""
+    """启动 REST API 和 MCP 服务（同一端口）。"""
     settings = Settings()
+    resolved_host = host or settings.api_host
+    resolved_port = port or settings.api_port
+    os.environ["MCMOD_API_HOST"] = resolved_host
+    os.environ["MCMOD_API_PORT"] = str(resolved_port)
+    if settings.api_base.rstrip("/") == "http://127.0.0.1:8000":
+        os.environ["MCMOD_API_BASE"] = f"http://127.0.0.1:{resolved_port}"
     uvicorn.run(
         "mcmod.api:create_app",
         factory=True,
-        host=host or settings.api_host,
-        port=port or settings.api_port,
+        host=resolved_host,
+        port=resolved_port,
         reload=reload,
     )
 
